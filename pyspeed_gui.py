@@ -203,10 +203,11 @@ class PySpeedApp:
             except Exception as e: self.log(f"Compare failed: {e}\n{traceback.format_exc()}"), self.set_status("Compare error")
         threading.Thread(target=worker, daemon=True).start()
 
-    def show_about(self): messagebox.showinfo("About PySpeed", "PySpeed Optimizer v1.0\n\nAn intelligent, multi-backend Python accelerator with a real-time profiler.")
+    def show_about(self): messagebox.showinfo("About PySpeed", "PySpeed Optimizer v1.0\n\nAn intelligent, multi-backend Python accelerator with a real-time profiler, Autor: LMLK-seal")
 
 def main():
     root = ctk.CTk(); app = PySpeedApp(root); root.mainloop()
 
 if __name__ == "__main__":
+
     main()
