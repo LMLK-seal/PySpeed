@@ -37,11 +37,13 @@
 
 | Test Case | Original (s) | Optimized (s) | Speedup | Status |
 |-----------|--------------|---------------|---------|---------|
-| **Pi Calculation (Leibniz)** | 13.51 | 0.43 | **31.4x** | ✅ Verified |
+| **Recursive Fibonacci** | 6.90 | 0.04 | **172x** | ✅ Verified |
 | **Monte Carlo π** | 91.0 | 0.98 | **92.4x** | ✅ Verified |
 | **Matrix Multiplication** | 43.0 | 0.61 | **71x** | ✅ Verified |
 | **Image Convolution** | 35.0 | 0.64 | **55x** | ✅ Verified |
 | **Time Series Analysis** | 47.0 | 0.98 | **48x** | ✅ Verified |
+| **Pi Calculation (Leibniz)** | 13.51 | 0.43 | **31.4x** | ✅ Verified |
+| **Image Brightening** | 17.34 | 0.96 | **18.1x** | ✅ Verified |
 
 ### 📈 Optimization Pipeline Results
 
@@ -83,11 +85,27 @@ Output: Generated convoluted_blurred_image.png (correctness verified)
 vs. pandas.rolling(): 0.16s (PySpeed closed 98% of performance gap)
 ```
 
+**Recursive Fibonacci (Memoization):**
+```
+✅ Applied @functools.lru_cache decorator
+Median Original: 6.90s → Median Optimized: 0.04s
+Speedup: 172x (exponential → linear complexity)
+```
+
+**Image Brightening (NumPy Vectorization):**
+```
+✅ Transformed nested loops into vectorized operations
+Median Original: 17.34s → Median Optimized: 0.96s  
+Speedup: 18.1x (4K image processing)
+```
+
 **Key Insights:** 
-- **All CPU-bound algorithms** achieved **30-90x speedups** with zero manual optimization
-- **JIT compilation overhead** (1-2s) pays off immediately on subsequent runs
-- **Gap bridging**: PySpeed transforms unusable code (30-90s) into production-ready performance (<1s)
+- **All CPU-bound algorithms** achieved **18-172x speedups** with zero manual optimization
+- **Multiple optimization types**: JIT compilation, vectorization, and memoization all work seamlessly
+- **Complexity transformation**: Converts exponential algorithms (Fibonacci) to linear performance
+- **Gap bridging**: PySpeed transforms unusable code (17-91s) into production-ready performance (<1s)
 - **Near-native performance**: Gets within 6x of professional C-backed libraries (pandas, NumPy)
+
 
 ---
 
