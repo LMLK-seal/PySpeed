@@ -1,0 +1,60 @@
+# -----------------------------------------------------------------------------
+# Core Requirements for PySpeed Analysis Engine
+#
+# These packages are essential for the non-GUI parts of the application,
+# including the Jupyter magic and the core optimization logic.
+# -----------------------------------------------------------------------------
+
+# For Abstract Syntax Tree (AST) to source code conversion. A fallback to
+# the built-in `ast.unparse` is available for Python 3.9+, but astor is
+# often preferred for its formatting.
+astor>=0.8.1
+
+# For running the Jupyter/IPython magic command (`%%pyspeed`).
+ipython>=7.0.0
+
+# For the optional (opt-in) telemetry feature to send anonymous usage data.
+requests>=2.25.0
+
+
+# -----------------------------------------------------------------------------
+# GUI Requirements
+#
+# This package is required ONLY to run the pyspeed_gui.py application.
+# -----------------------------------------------------------------------------
+
+# The modern and themeable UI toolkit used for the desktop application.
+customtkinter>=5.2.0
+
+
+# -----------------------------------------------------------------------------
+# High-Performance Backends (Highly Recommended)
+#
+# These are the libraries that PySpeed uses to actually accelerate code.
+# The tool will run without them but will not be able to apply optimizations.
+# -----------------------------------------------------------------------------
+
+# The core Just-In-Time (JIT) compiler for accelerating numeric code.
+# PySpeed's primary optimization strategy relies on this.
+numba>=0.58.0
+
+# The fundamental package for scientific computing. Required by Numba and
+# used in many test cases. Version <2 is recommended for broad compatibility
+# with other scientific libraries like SciPy.
+numpy<2.0.0
+
+# A powerful data analysis library. Used as a "gold standard" benchmark in the
+# time series test case and commonly found in code that PySpeed would analyze.
+pandas>=1.5.0
+
+
+# -----------------------------------------------------------------------------
+# Optional Test Case Dependencies
+#
+# These packages are not required for PySpeed to function but are needed
+# to run all the provided test case scripts (e.g., image_convolution.py).
+# -----------------------------------------------------------------------------
+
+# The Python Imaging Library, used for loading/saving images in the
+# image convolution test case.
+Pillow>=9.0.0
