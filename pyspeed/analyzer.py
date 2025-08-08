@@ -1,4 +1,4 @@
-# In pyspeed_project/pyspeed/analyzer.py
+# In pyspeed_project/analyzer.py
 
 import os
 import sys
@@ -6,252 +6,260 @@ import subprocess
 import tempfile
 import time
 import ast
+import inspect
 import io
 import pstats
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
 
-# ---------- AST & Optimization Engine ----------
+# ---------- Helper: Numba Safety Layer ----------
+def try_numba_compile(func_node: ast.FunctionDef, full_source: str) -> Tuple[bool, str]:
+    try:
+        import numba
+        namespace = {}
+        exec(full_source, namespace)
+        func_to_test = namespace.get(func_node.name)
+        if not func_to_test or not callable(func_to_test): return False, "Function not found"
+        numba.njit(func_to_test)
+        return True, "Function is Numba-compatible (compilation successful)."
+    except numba.core.errors.NumbaError as e:
+        return False, f"Numba compilation failed: {str(e).splitlines()[0]}"
+    except Exception as e:
+        return False, f"An unexpected error occurred during safety check: {e}"
 
+# ---------- AST & Optimization Engine ----------
 @dataclass
 class OptimizationSuggestion:
-    """A suggestion produced by an optimizer."""
     func_name: str; line_no: int; message: str; severity: str = "info"
+    opt_type: str = "general"
 
 @dataclass
 class OptimizationResult:
-    """The result of running the full optimization pipeline."""
-    original_source: str; modified_source: str
+    original_source: str; modified_source: str; original_func_source: str; modified_func_source: str
     suggestions: List[OptimizationSuggestion] = field(default_factory=list)
-    transformed_funcs: Dict[str, str] = field(default_factory=dict) # e.g., {'my_func': 'numba'}
+    transformed_funcs: Dict[str, str] = field(default_factory=dict)
     needed_imports: set = field(default_factory=set)
+    actionable_suggestion: Optional[str] = None
+    rejection_reason: Optional[str] = None
 
 class BaseOptimizer:
-    """Base class for an optimization strategy."""
-    def __init__(self, source_tree: ast.AST):
-        self.tree = source_tree; self.suggestions = []
+    opt_type = "general"
+    def __init__(self, source_tree: ast.AST, profile_entries: List['ProfileEntry'] = None, full_source: str = ""):
+        self.tree = source_tree; self.source = full_source
+        self.profile = {p.func_name: p for p in profile_entries} if profile_entries else {}
+        self.suggestions = []
     def analyze(self) -> List[OptimizationSuggestion]: raise NotImplementedError
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]: return self.tree, []
 
-class MockMLOptimizer(BaseOptimizer):
-    """Simulates a trained ML model that provides high-level guidance."""
-    KNOWLEDGE_BASE = {
-        'calculate_pi': ('numba', 'High confidence: Matches known CPU-bound numeric kernels.'),
-        'process_image': ('numpy', 'High confidence: Matches known array-processing tasks.'),
-        'estimate_pi_monte_carlo': ('numba', 'High confidence: Matches known simulation/statistical patterns.'),
-    }
-    def analyze(self) -> List[OptimizationSuggestion]:
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef) and node.name in self.KNOWLEDGE_BASE:
-                opt_type, message = self.KNOWLEDGE_BASE[node.name]
-                self.suggestions.append(OptimizationSuggestion(
-                    func_name=node.name, line_no=node.lineno,
-                    message=f"[ML SUGGESTION] {message}", severity="recommendation"
-                ))
-        return self.suggestions
-    def get_ml_targets(self) -> Dict[str, str]:
-        return {s.func_name: self.KNOWLEDGE_BASE[s.func_name][0] for s in self.suggestions}
-
 class NumbaOptimizer(BaseOptimizer):
-    """Applies @numba.njit decorators with robust, expanded heuristics."""
-    IGNORE_FUNCS = {'__init__', '__str__', '__repr__'}
-    UNSUPPORTED_CALL_ATTRS = {'pack', 'grid', 'place', 'configure', 'mainloop', 'title', 'geometry', 'run', 'split', 'join', 'format', 'exists', 'isfile', 'read', 'write', 'append', 'pop', 'startswith'}
-    UNSUPPORTED_CALL_FUNCS = {'open', 'print', 'input', 'subprocess', 'shutil', 'os.path.exists'}
-    UNSUPPORTED_KEYWORDS = (ast.Try, ast.JoinedStr, ast.With, ast.Yield, ast.Global, ast.Nonlocal, ast.AsyncFor, ast.Await)
-
-    # Expanded list of modules that signal numeric work
-    NUMERIC_MODULES = {'math', 'np', 'numpy', 'random'}
-
-    def is_disqualified(self, node: ast.FunctionDef) -> bool:
-        if node.name in self.IGNORE_FUNCS: return True
-        for sub_node in ast.walk(node):
-            if isinstance(sub_node, self.UNSUPPORTED_KEYWORDS): return True
-            if isinstance(sub_node, ast.Call):
-                func = sub_node.func
-                if isinstance(func, ast.Name) and func.id in self.UNSUPPORTED_CALL_FUNCS: return True
-                if isinstance(func, ast.Attribute) and func.attr in self.UNSUPPORTED_CALL_ATTRS: return True
-        return False
-
-    def is_strong_numeric_candidate(self, node: ast.FunctionDef) -> bool:
-        """
-        Stage 2: Score functions based on an expanded set of strong numeric signals.
-        """
-        score = 0
-        has_loop = False
-        for n in ast.walk(node):
-            if isinstance(n, ast.For):
-                has_loop = True
-            
-            # Power operations (e.g., x**2) are a good signal.
-            if isinstance(n, ast.BinOp) and isinstance(n.op, ast.Pow):
-                score += 2
-            # Augmented assignments (+=, -= etc.) are common in numeric kernels.
-            elif isinstance(n, ast.AugAssign):
-                score += 1
-            # Floating point numbers are a strong signal.
-            elif isinstance(n, ast.Constant) and isinstance(n.value, float):
-                score += 3
-            # Array/list access (subscript) inside a loop is a very strong signal.
-            elif has_loop and isinstance(n, ast.Subscript):
-                score += 2
-            # Calls to known numeric libraries are the strongest signal.
-            elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
-                if hasattr(n.func.value, 'id') and n.func.value.id in self.NUMERIC_MODULES:
-                    score += 5
-        
-        return score >= 5 and has_loop
-
+    opt_type = "numba"
     def analyze(self) -> List[OptimizationSuggestion]:
         for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef) and not self.is_disqualified(node) and self.is_strong_numeric_candidate(node):
-                self.suggestions.append(OptimizationSuggestion(
-                    func_name=node.name,
-                    line_no=node.lineno,
-                    message="Strong candidate for Numba JIT due to heavy numeric computation.",
-                    severity="recommendation"
-                ))
+            if isinstance(node, ast.FunctionDef):
+                is_safe, reason = try_numba_compile(node, self.source)
+                self.suggestions.append(OptimizationSuggestion(node.name, node.lineno, reason, "recommendation" if is_safe else "info", self.opt_type))
         return self.suggestions
-        
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]:
         transformed = []
         class DecoratorInserter(ast.NodeTransformer):
             def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
-                nonlocal transformed
-                if node.name in candidates:
-                    is_decorated = any((isinstance(d, ast.Attribute) and getattr(d, 'attr', '') in ('njit', 'jit')) for d in node.decorator_list)
-                    if not is_decorated:
-                        node.decorator_list.insert(0, ast.parse("numba.njit").body[0].value); transformed.append(node.name)
+                if node.name in candidates and not any(isinstance(d, ast.Attribute) and getattr(d, 'attr', '') in ('njit', 'jit') for d in node.decorator_list):
+                    node.decorator_list.insert(0, ast.parse("numba.njit").body[0].value); transformed.append(node.name)
                 return node
         new_tree = DecoratorInserter().visit(self.tree); ast.fix_missing_locations(new_tree); return new_tree, transformed
 
-class NumpyVectorizeOptimizer(BaseOptimizer):
-    """Analyzes and transforms simple loops into vectorized NumPy operations."""
+class MemoizationOptimizer(BaseOptimizer):
+    opt_type = "memoization"
+    IMPURE_CALLS = {'print', 'open', 'input', 'shutil', 'os.', 'self.', 'plt.', 'fig.', 'ax.'}
+    UNHASHABLE_HINTS = ['list', 'dict', 'ndarray', 'List', 'Dict', 'np.ndarray']
+    def is_pure(self, node: ast.FunctionDef) -> bool:
+        if any(isinstance(n, (ast.Nonlocal, ast.Global)) for n in ast.walk(node)): return False
+        for n in ast.walk(node):
+            if isinstance(n, ast.Call):
+                call_source = ast.get_source_segment(self.source, n.func)
+                if call_source and any(impure in call_source for impure in self.IMPURE_CALLS): return False
+        return True
+    def has_hashable_args(self, node: ast.FunctionDef) -> bool:
+        for arg in node.args.args:
+            if arg.annotation:
+                hint_source = ast.get_source_segment(self.source, arg.annotation)
+                if hint_source and any(unhashable in hint_source for unhashable in self.UNHASHABLE_HINTS): return False
+        return True
+    def is_recursive(self, node: ast.FunctionDef) -> bool:
+        for sub_node in ast.walk(node):
+            if isinstance(sub_node, ast.Call) and isinstance(sub_node.func, ast.Name) and sub_node.func.id == node.name: return True
+        return False
     def analyze(self) -> List[OptimizationSuggestion]:
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef):
+                is_pure_check = self.is_pure(node)
+                has_hashable_args_check = self.has_hashable_args(node)
+                is_recursive_check = self.is_recursive(node)
+                if is_pure_check and has_hashable_args_check and (is_recursive_check or (node.name in self.profile and self.profile[node.name].ncalls > 10)):
+                    reason = "This recursive function" if is_recursive_check else "This pure function"
+                    self.suggestions.append(OptimizationSuggestion(node.name, node.lineno, f"{reason} with hashable arguments is a strong candidate for `@functools.lru_cache`.", "recommendation", self.opt_type))
+                elif not has_hashable_args_check and node.name in self.profile:
+                    self.suggestions.append(OptimizationSuggestion(node.name, node.lineno, "Cannot memoize: Function accepts unhashable arguments (e.g., lists, arrays).", "info", self.opt_type))
+        return self.suggestions
+    def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]:
+        transformed = []
+        class CacheInserter(ast.NodeTransformer):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+                if node.name in candidates:
+                    node.decorator_list.insert(0, ast.parse("functools.lru_cache(maxsize=None)").body[0].value); transformed.append(node.name)
+                return node
+        new_tree = CacheInserter().visit(self.tree); ast.fix_missing_locations(new_tree); return new_tree, transformed
+
+class NumpyVectorizeOptimizer(BaseOptimizer):
+    opt_type = "numpy"
+    def _is_vectorizable_assign(self, assign_node):
+        if not isinstance(assign_node, (ast.Assign, ast.AugAssign)): return False
+        target = assign_node.target if isinstance(assign_node, ast.AugAssign) else assign_node.targets[0]
+        if not isinstance(target, ast.Subscript): return False
+        return True
+    def analyze(self) -> List[OptimizationSuggestion]:
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef):
+                for item in node.body:
+                    if isinstance(item, ast.For):
+                        inner_loop_body = item.body
+                        if len(item.body) == 1 and isinstance(item.body[0], ast.For): inner_loop_body = item.body[0].body
+                        if len(inner_loop_body) == 1 and self._is_vectorizable_assign(inner_loop_body[0]):
+                             self.suggestions.append(OptimizationSuggestion(
+                                node.name, item.lineno, "This loop performs element-wise operations and can be rewritten with NumPy vectorization.", "recommendation", self.opt_type
+                            )); break
         return self.suggestions
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]:
         transformed_funcs = []
+        # --- FIX: The rewriter class now gets the source code passed to it ---
         class VectorizeRewriter(ast.NodeTransformer):
-            def __init__(self):
-                self.current_func_name = None; self.has_transformed = False
+            def __init__(self, source_code: str):
+                self.source = source_code
+                self.transformed_funcs_list = []
             def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
                 if node.name in candidates:
-                    self.current_func_name = node.name; self.has_transformed = False
-                    self.generic_visit(node)
-                    if self.has_transformed:
-                        nonlocal transformed_funcs
-                        if self.current_func_name not in transformed_funcs: transformed_funcs.append(self.current_func_name)
-                    self.current_func_name = None
+                    loop_rewriter = self.LoopRewriter(node.name, self.source, self.transformed_funcs_list)
+                    node.body = [loop_rewriter.visit(child) for child in node.body]
                 return node
-            def visit_For(self, node: ast.For) -> Optional[ast.AST]:
-                if not self.current_func_name: return node
-                try:
-                    if not (isinstance(node.iter, ast.Call) and node.iter.func.id == 'range' and isinstance(node.iter.args[0], ast.Call) and node.iter.args[0].func.id == 'len'): return node
-                    if not (len(node.body) == 1 and isinstance(node.body[0], ast.Assign)): return node
-                    assign = node.body[0]
-                    if not isinstance(assign.targets[0], ast.Subscript) or not isinstance(assign.value, ast.BinOp): return node
-                    target_array, left_operand, right_operand = assign.targets[0].value.id, assign.value.left.value.id, assign.value.right.value.id
-                    op_map = {ast.Add: '+', ast.Sub: '-', ast.Mult: '*', ast.Div: '/'}
-                    if type(assign.value.op) not in op_map: return node
-                    new_code_str = f"{target_array} = {left_operand} {op_map[type(assign.value.op)]} {right_operand}"
-                    new_node = ast.parse(new_code_str).body[0]
-                    self.has_transformed = True
-                    return ast.fix_missing_locations(new_node)
-                except Exception: return node
-        new_tree = VectorizeRewriter().visit(self.tree)
-        return new_tree, transformed_funcs
+            class LoopRewriter(ast.NodeTransformer):
+                def __init__(self, func_name, source, transformed_list):
+                    self.func_name = func_name; self.source = source; self.transformed_list = transformed_list
+                def visit_For(self, node: ast.For) -> Optional[ast.AST]:
+                    try:
+                        if len(node.body) == 1 and isinstance(node.body[0], ast.For):
+                            inner_loop = node.body[0]
+                            if len(inner_loop.body) == 1 and isinstance(inner_loop.body[0], ast.AugAssign):
+                                assign = inner_loop.body[0]
+                                target_array_name = ast.get_source_segment(self.source, assign.target.value)
+                                op_map = {ast.Add: '+=', ast.Sub: '-=', ast.Mult: '*=', ast.Div: '/='}
+                                op_str = op_map[type(assign.op)]
+                                value_str = ast.get_source_segment(self.source, assign.value)
+                                new_code = f"{target_array_name} {op_str} {value_str}"
+                                if self.func_name not in self.transformed_list: self.transformed_list.append(self.func_name)
+                                return ast.fix_missing_locations(ast.parse(new_code).body[0])
+                    except Exception: pass
+                    return self.generic_visit(node)
+        
+        rewriter = VectorizeRewriter(self.source)
+        new_tree = rewriter.visit(self.tree)
+        return new_tree, rewriter.transformed_funcs_list
 
-class TranspilerOptimizer(BaseOptimizer):
-    """Stubs out complex functions for transpilation to C++/Rust."""
-    def analyze(self) -> List[OptimizationSuggestion]: return self.suggestions
-    def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]:
-        transformed = []
-        class TranspilerStubber(ast.NodeTransformer):
-            def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
-                nonlocal transformed
-                if node.name in candidates:
-                    arg_names = [arg.arg for arg in node.args.args]
-                    new_body_str = f"return my_cpp_extension.{node.name}({', '.join(arg_names)})"
-                    comment = ast.Expr(value=ast.Constant(value="This function stubbed for C++/Rust transpilation."))
-                    node.body = [ast.parse(new_body_str).body[0]]
-                    ast.increment_lineno(node.body[0], node.lineno)
-                    node.body.insert(0, comment)
-                    transformed.append(node.name)
-                return node
-        new_tree = TranspilerStubber().visit(self.tree); ast.fix_missing_locations(new_tree); return new_tree, transformed
+class BatchingOptimizer(BaseOptimizer):
+    opt_type = "batching"
+    def analyze(self) -> List[OptimizationSuggestion]: return []
+    def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]: return self.tree, []
 
-def ast_to_source(tree: ast.AST) -> str:
-    """Converts an AST tree back to a string, trying astor then ast.unparse."""
-    try:
-        import astor
-        return astor.to_source(tree)
-    except ImportError:
-        if hasattr(ast, "unparse"):
-            return ast.unparse(tree)
-    return "# Could not generate source. Please install 'astor' or use Python 3.9+."
+class MultiprocessingOptimizer(BaseOptimizer):
+    opt_type = "multiprocessing"
+    def analyze(self) -> List[OptimizationSuggestion]: return []
+    def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]: return self.tree, []
 
-def run_optimization_pipeline(source: str, hotspot_funcs: List[str]) -> OptimizationResult:
-    """Runs a robust, multi-pass optimization pipeline."""
+# ---------- Pipeline and Profiling ----------
+def run_optimization_pipeline(source: str, hotspot_funcs: List[str], mode: str, profile_entries: List['ProfileEntry']) -> OptimizationResult:
     try: tree = ast.parse(source)
-    except Exception as e: return OptimizationResult(source, source, suggestions=[OptimizationSuggestion("parser", 0, f"Failed to parse script: {e}", "error")])
+    except Exception as e: return OptimizationResult(source, source, "", "", [OptimizationSuggestion("parser", 0, f"Failed to parse script: {e}", "error")])
 
-    all_suggestions = []; ml_optimizer = MockMLOptimizer(tree)
-    all_suggestions.extend(ml_optimizer.analyze())
-    for opt_cls in [NumbaOptimizer, NumpyVectorizeOptimizer, TranspilerOptimizer]: all_suggestions.extend(opt_cls(tree).analyze())
+    all_suggestions = []
+    optimizer_classes = [NumbaOptimizer, NumpyVectorizeOptimizer, MultiprocessingOptimizer, MemoizationOptimizer, BatchingOptimizer]
+    for opt_cls in optimizer_classes:
+        all_suggestions.extend(opt_cls(tree, profile_entries, full_source=source).analyze())
+
+    if not hotspot_funcs: return OptimizationResult(source, source, "", "", all_suggestions)
+    target_func_name = hotspot_funcs[0]
+
+    if mode == "Multiprocessing Suggest":
+        return OptimizationResult(source, source, "", "", all_suggestions)
+
+    optimizer_map = {"Numba JIT": (NumbaOptimizer, {'numba'}), "NumPy Vectorize": (NumpyVectorizeOptimizer, {'numpy as np'}), "Memoization": (MemoizationOptimizer, {'functools'})}
+    mode_to_type = {"Numba JIT": "numba", "NumPy Vectorize": "numpy", "Memoization": "memoization"}
     
-    current_tree = tree; transformed_funcs, needed_imports = {}, set(); already_transformed = set()
-    transformation_priority = [('numba', NumbaOptimizer), ('numpy', NumpyVectorizeOptimizer), ('transpile', TranspilerOptimizer)]
-    ml_targets = ml_optimizer.get_ml_targets()
+    selected_mode = mode
+    if mode == "Auto (Recommended)":
+        recommendations = [s for s in all_suggestions if s.func_name == target_func_name and s.severity == 'recommendation']
+        if any(s.opt_type == "numba" for s in recommendations): selected_mode = "Numba JIT"
+        elif any(s.opt_type == "numpy" for s in recommendations): selected_mode = "NumPy Vectorize"
+        elif any(s.opt_type == "memoization" for s in recommendations): selected_mode = "Memoization"
+        else: return OptimizationResult(source, source, "", "", all_suggestions, rejection_reason="Auto mode could not find a suitable optimization for the top hotspot.")
+    
+    selected_opt_type = mode_to_type.get(selected_mode)
+    is_recommended = any(s.func_name == target_func_name and s.severity == 'recommendation' and s.opt_type == selected_opt_type for s in all_suggestions)
+    if mode != "Auto (Recommended)" and not is_recommended:
+        info_reason = next((s.message for s in all_suggestions if s.func_name == target_func_name and s.opt_type == selected_opt_type), "it is not a suitable candidate for this mode.")
+        return OptimizationResult(source, source, "", "", all_suggestions, rejection_reason=f"Transformation rejected for '{target_func_name}'. Reason: {info_reason}")
 
-    for opt_type, optimizer_cls in transformation_priority:
-        candidates_this_pass = set()
-        for func_name in hotspot_funcs:
-            if func_name in already_transformed: continue
-            if ml_targets.get(func_name) == opt_type or (not ml_targets.get(func_name) and any(s.func_name == func_name and opt_type.upper() in s.message.upper() for s in all_suggestions)):
-                 candidates_this_pass.add(func_name)
-        if not candidates_this_pass: continue
-        
-        optimizer = optimizer_cls(current_tree)
-        current_tree, funcs_changed = optimizer.transform(list(candidates_this_pass))
-        
-        for func_name in funcs_changed:
-            transformed_funcs[func_name] = opt_type; already_transformed.add(func_name)
-            if opt_type == 'numba': needed_imports.add('numba')
-            if opt_type == 'numpy': needed_imports.add('numpy as np')
-            if opt_type == 'transpile': needed_imports.add('my_cpp_extension')
-
+    optimizer_cls, needed_imports = optimizer_map.get(selected_mode, (None, None))
+    if not optimizer_cls: return OptimizationResult(source, source, "", "", all_suggestions)
+    
+    optimizer = optimizer_cls(tree, profile_entries, full_source=source)
+    new_tree, funcs_changed = optimizer.transform([target_func_name])
+    
+    transformed_funcs = {func: selected_mode for func in funcs_changed}
+    original_func_source = get_function_source(target_func_name, tree)
+    modified_func_source = get_function_source(target_func_name, new_tree)
+    
     modified_source = source
     if transformed_funcs:
-        modified_source = ast_to_source(current_tree)
-        import_str = "\n".join([f"import {imp}" for imp in sorted(list(needed_imports))])
-        if import_str: modified_source = import_str + "\n\n" + modified_source
+        modified_source = ast_to_source(new_tree)
+        if needed_imports: modified_source = "\n".join([f"import {imp}" for imp in sorted(list(needed_imports))]) + "\n\n" + modified_source
 
-    return OptimizationResult(source, modified_source, all_suggestions, transformed_funcs, needed_imports)
+    return OptimizationResult(source, modified_source, original_func_source, modified_func_source, all_suggestions, transformed_funcs, needed_imports)
 
+def get_function_source(func_name: str, tree: ast.AST) -> str:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == func_name: return ast_to_source(node)
+    return ""
+def _generate_mp_template(func_node: ast.FunctionDef, loop_node: ast.For, source: str) -> str: return ""
 @dataclass
 class ProfileEntry:
-    func_name: str; file: str; line: int; ncalls: int
-    tottime: float; percall: float; cumtime: float; percall_cum: float
-
-def run_profile_on_script(script_path: str, timeout: int = 120) -> Tuple[Optional[str], Optional[str]]:
+    func_name: str; file: str; line: int; ncalls: int; tottime: float; cumtime: float;
+    is_leaf: bool = False; impact_score: float = 0.0
+def parse_profile(prof_file: str, top_n: int = 20) -> List[ProfileEntry]:
+    stats = pstats.Stats(prof_file); callees_data = {}
+    try:
+        stats.calc_callees()
+        if hasattr(stats, 'callees'): callees_data = stats.callees
+    except Exception: pass
+    entries = []
+    for func_key, data in stats.stats.items():
+        ncalls, _, tottime, cumtime, _ = data
+        filename, lineno, func_name = func_key
+        if filename == '~' or filename is None or tottime == 0: continue
+        is_leaf = func_key not in callees_data
+        entries.append(ProfileEntry(func_name=func_name, file=filename, line=lineno, ncalls=ncalls, tottime=tottime, cumtime=cumtime, is_leaf=is_leaf, impact_score=tottime * ncalls))
+    entries.sort(key=lambda x: x.impact_score, reverse=True)
+    return entries[:top_n]
+def ast_to_source(tree: ast.AST) -> str:
+    try: import astor; return astor.to_source(tree)
+    except ImportError:
+        if hasattr(ast, "unparse"): return ast.unparse(tree)
+    return "# Could not generate source."
+def run_profile_on_script(script_path: str, timeout: int = 300) -> Tuple[Optional[str], Optional[str]]:
     prof_file = os.path.join(tempfile.gettempdir(), f"pyspeed_{int(time.time())}.prof"); cmd = [sys.executable, "-m", "cProfile", "-o", prof_file, script_path]
     try: completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired: return None, "Profiling timed out"
     if completed.returncode != 0: return None, completed.stderr or completed.stdout
     return prof_file, None
-
-def parse_profile(prof_file: str, top_n: int = 20) -> List[ProfileEntry]:
-    stats = pstats.Stats(prof_file); stats.sort_stats('tottime'); entries = []
-    sorted_keys = stats.fcn_list
-    if not sorted_keys: return []
-    for func_key in sorted_keys[:top_n]:
-        data = stats.stats[func_key]; filename, lineno, func_name = func_key
-        ncalls, nrecursive, tottime, cumtime, callers = data
-        if filename == '~' or filename is None: filename = "built-in"; lineno = 0
-        elif filename.startswith('~'): filename = os.path.expanduser(filename)
-        entries.append(ProfileEntry(func_name=func_name, file=filename, line=lineno, ncalls=ncalls, tottime=tottime, cumtime=cumtime, percall=tottime / ncalls if ncalls > 0 else 0, percall_cum=cumtime / ncalls if ncalls > 0 else 0))
-    return entries
-
-def run_script_time(script_path: str, timeout: int = 120) -> Tuple[Optional[float], Optional[str]]:
+def run_script_time(script_path: str, timeout: int = 300) -> Tuple[Optional[float], Optional[str]]:
     start = time.perf_counter();
     try: completed = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired: return None, "Execution timed out"
