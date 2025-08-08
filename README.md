@@ -6,6 +6,7 @@
 
 > **Intelligent Python Performance Optimization Tool**  
 > Automatically profile, analyze, and accelerate your Python code with minimal effort.
+> 🎯 Specialized for CPU-intensive, computationally heavy algorithms - not all Python code benefits from optimization.
 
 ---
 
