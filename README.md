@@ -28,6 +28,67 @@
 - **🧠 Intelligent Targeting**: Applies optimizations only where they matter most
 
 ---
+## 📊 Performance Benchmarks
+
+### 🏆 Real-World Results
+
+**Test Environment:** AMD Ryzen 5-3600, Python 3.9, Numba 0.61.2
+
+| Test Case | Original (s) | Optimized (s) | Speedup | Status |
+|-----------|--------------|---------------|---------|---------|
+| **Pi Calculation (Leibniz)** | 13.51 | 0.43 | **31.4x** | ✅ Verified |
+| **Monte Carlo π** | 91.0 | 0.98 | **92.4x** | ✅ Verified |
+| **Matrix Multiplication** | 43.0 | 0.61 | **71x** | ✅ Verified |
+| **Image Convolution** | 35.0 | 0.64 | **55x** | ✅ Verified |
+| **Time Series Analysis** | 47.0 | 0.98 | **48x** | ✅ Verified |
+
+### 📈 Optimization Pipeline Results
+
+**Pi Calculation (Leibniz Series):**
+```
+[11:27:34] INFO: Numba v0.61.2 is available.
+[11:27:53] Applied transformations: Function 'calculate_pi' was transformed using: NUMBA
+[11:27:58] ✅ Optimized run time: 1.71s (includes JIT compilation)
+[CLI Run] Warmed-up execution: 0.43s → 31.4x speedup
+```
+
+**Monte Carlo π Estimation:**
+```
+[11:39:52 - 11:41:23] Profiling complete (~91 seconds pure Python)
+[CLI Run] Optimized execution: 0.98s → 92.4x speedup
+```
+
+**Matrix Multiplication (Triple-Nested Loops):**
+```
+[11:51:37 - 11:52:20] Profiling complete (~43 seconds pure Python)
+✅ Optimized run time: 1.21s (includes JIT compilation)
+[CLI Run] Warmed-up execution: 0.61s → 71x speedup
+vs. np.dot(): 0.0016s (PySpeed closed massive performance gap)
+```
+
+**Image Convolution (Quadruple-Nested Loops):**
+```
+[11:55:42 - 11:56:17] Profiling complete (~35 seconds pure Python)
+✅ Optimized run time: 1.34s (includes JIT compilation)
+[CLI Run] Warmed-up execution: 0.64s → 55x speedup
+Output: Generated convoluted_blurred_image.png (correctness verified)
+```
+
+**Time Series Analysis (Rolling Window SMA):**
+```
+[12:00:19 - 12:01:06] Profiling complete (~47 seconds pure Python)
+✅ Optimized run time: 2.15s (includes JIT compilation)  
+[CLI Run] Warmed-up execution: 0.98s → 48x speedup
+vs. pandas.rolling(): 0.16s (PySpeed closed 98% of performance gap)
+```
+
+**Key Insights:** 
+- **All CPU-bound algorithms** achieved **30-90x speedups** with zero manual optimization
+- **JIT compilation overhead** (1-2s) pays off immediately on subsequent runs
+- **Gap bridging**: PySpeed transforms unusable code (30-90s) into production-ready performance (<1s)
+- **Near-native performance**: Gets within 6x of professional C-backed libraries (pandas, NumPy)
+
+---
 
 ## 📦 Installation
 
@@ -307,68 +368,6 @@ Have an optimization idea? We'd love to hear it:
 - **Use Case**: Describe the scenario
 - **Implementation**: Technical approach (if known)
 - **Impact**: Expected performance benefits
-
----
-
-## 📊 Performance Benchmarks
-
-### 🏆 Real-World Results
-
-**Test Environment:** AMD Ryzen 5-3600, Python 3.9, Numba 0.61.2
-
-| Test Case | Original (s) | Optimized (s) | Speedup | Status |
-|-----------|--------------|---------------|---------|---------|
-| **Pi Calculation (Leibniz)** | 13.51 | 0.43 | **31.4x** | ✅ Verified |
-| **Monte Carlo π** | 91.0 | 0.98 | **92.4x** | ✅ Verified |
-| **Matrix Multiplication** | 43.0 | 0.61 | **71x** | ✅ Verified |
-| **Image Convolution** | 35.0 | 0.64 | **55x** | ✅ Verified |
-| **Time Series Analysis** | 47.0 | 0.98 | **48x** | ✅ Verified |
-
-### 📈 Optimization Pipeline Results
-
-**Pi Calculation (Leibniz Series):**
-```
-[11:27:34] INFO: Numba v0.61.2 is available.
-[11:27:53] Applied transformations: Function 'calculate_pi' was transformed using: NUMBA
-[11:27:58] ✅ Optimized run time: 1.71s (includes JIT compilation)
-[CLI Run] Warmed-up execution: 0.43s → 31.4x speedup
-```
-
-**Monte Carlo π Estimation:**
-```
-[11:39:52 - 11:41:23] Profiling complete (~91 seconds pure Python)
-[CLI Run] Optimized execution: 0.98s → 92.4x speedup
-```
-
-**Matrix Multiplication (Triple-Nested Loops):**
-```
-[11:51:37 - 11:52:20] Profiling complete (~43 seconds pure Python)
-✅ Optimized run time: 1.21s (includes JIT compilation)
-[CLI Run] Warmed-up execution: 0.61s → 71x speedup
-vs. np.dot(): 0.0016s (PySpeed closed massive performance gap)
-```
-
-**Image Convolution (Quadruple-Nested Loops):**
-```
-[11:55:42 - 11:56:17] Profiling complete (~35 seconds pure Python)
-✅ Optimized run time: 1.34s (includes JIT compilation)
-[CLI Run] Warmed-up execution: 0.64s → 55x speedup
-Output: Generated convoluted_blurred_image.png (correctness verified)
-```
-
-**Time Series Analysis (Rolling Window SMA):**
-```
-[12:00:19 - 12:01:06] Profiling complete (~47 seconds pure Python)
-✅ Optimized run time: 2.15s (includes JIT compilation)  
-[CLI Run] Warmed-up execution: 0.98s → 48x speedup
-vs. pandas.rolling(): 0.16s (PySpeed closed 98% of performance gap)
-```
-
-**Key Insights:** 
-- **All CPU-bound algorithms** achieved **30-90x speedups** with zero manual optimization
-- **JIT compilation overhead** (1-2s) pays off immediately on subsequent runs
-- **Gap bridging**: PySpeed transforms unusable code (30-90s) into production-ready performance (<1s)
-- **Near-native performance**: Gets within 6x of professional C-backed libraries (pandas, NumPy)
 
 ---
 
