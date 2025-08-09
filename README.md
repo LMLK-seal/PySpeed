@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.7.0-orange.svg)](https://github.com/pyspeed/releases)
+[![Version](https://img.shields.io/badge/version-2.2-orange.svg)](https://github.com/pyspeed/releases)
 
 > **Intelligent Python Performance Optimization Tool**  
 > Automatically profile, analyze, and accelerate your Python code with minimal effort.  
@@ -161,7 +161,7 @@ python pyspeed_gui.py
 
 **Workflow:**
 1. **📂 Load Script** → Open your Python file
-2. **📈 Profile** → Identify performance hotspots  
+2. **📈 Profile** → Identify performance hotspots (For computationally heavy algorithms profiling will time-out, skip to optimize).
 3. **🔧 Analyze & Optimize** → Apply intelligent transformations
 4. **⚡ Compare** → Benchmark original vs. optimized code
 
