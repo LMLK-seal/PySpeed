@@ -33,14 +33,10 @@ def show_diff_preview(original: str, modified: str, parent):
 
 def show_suggestion_popup(template: str, parent):
     suggestion_window = ctk.CTkToplevel(parent)
-    suggestion_window.title("Actionable Suggestion")
-    suggestion_window.geometry("800x600")
-    suggestion_window.transient(parent)
+    suggestion_window.title("Actionable Suggestion"); suggestion_window.geometry("800x600"); suggestion_window.transient(parent)
     suggestion_window.grid_rowconfigure(1, weight=1); suggestion_window.grid_columnconfigure(0, weight=1)
     ctk.CTkLabel(suggestion_window, text="PySpeed Refactoring Template", font=("", 14, "bold")).grid(row=0, column=0, pady=10)
-    suggestion_box = ctk.CTkTextbox(suggestion_window, wrap="word", font=("monospace", 12))
-    suggestion_box.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-    suggestion_box.insert("1.0", template)
+    suggestion_box = ctk.CTkTextbox(suggestion_window, wrap="word", font=("monospace", 12)); suggestion_box.grid(row=1, column=0, sticky="nsew", padx=10, pady=5); suggestion_box.insert("1.0", template)
     ctk.CTkLabel(suggestion_window, text="Copy this template and adapt it to your code.", justify="left").grid(row=2, column=0, pady=10, padx=10, sticky="w")
 
 class PySpeedApp:
@@ -59,32 +55,25 @@ class PySpeedApp:
         self.opt_mode = ctk.StringVar(value="Auto (Recommended)")
         modes = ["Auto (Recommended)", "Numba JIT", "NumPy Vectorize", "Memoization", "Multiprocessing Suggest"]
         ctk.CTkOptionMenu(top_frame, variable=self.opt_mode, values=modes).pack(side="left")
-        ctk.CTkButton(top_frame, text=" 3. Optimize", command=self.action_optimize).pack(side="left", padx=(15, 5))
+        ctk.CTkButton(top_frame, text="3. Optimize", command=self.action_optimize).pack(side="left", padx=(15, 5))
         ctk.CTkButton(top_frame, text="Run Original", command=lambda: self._run_script_task(self.script_path, "original")).pack(side="left", padx=5)
         ctk.CTkButton(top_frame, text="Run Optimized", command=lambda: self._run_script_task(self.optimized_path, "optimized")).pack(side="left", padx=5)
         ctk.CTkButton(top_frame, text="4. Compare", command=self.compare_timings).pack(side="left", padx=5)
         ctk.CTkButton(top_frame, text="About", command=self.show_about).pack(side="right", padx=5)
-        
         main_paned_window = ctk.CTkFrame(self.root, fg_color="transparent"); main_paned_window.pack(fill="both", expand=True, padx=10, pady=5)
         main_paned_window.grid_columnconfigure(0, weight=1); main_paned_window.grid_rowconfigure(0, weight=1)
-        
         left_right_splitter = ctk.CTkFrame(main_paned_window, fg_color="transparent"); left_right_splitter.pack(fill="both", expand=True)
         left_right_splitter.grid_columnconfigure(0, weight=3); left_right_splitter.grid_columnconfigure(1, weight=2); left_right_splitter.grid_rowconfigure(0, weight=1)
-
         left_frame = ctk.CTkFrame(left_right_splitter); left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5)); left_frame.grid_rowconfigure(1, weight=1); left_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(left_frame, text="Original Script Source").pack(anchor="w", padx=10, pady=(5,0))
         self.txt_source = ctk.CTkTextbox(left_frame, wrap="none", font=("monospace", 12)); self.txt_source.pack(fill="both", expand=True, padx=5, pady=5)
-
         right_frame = ctk.CTkFrame(left_right_splitter); right_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0)); right_frame.grid_rowconfigure(1, weight=1); right_frame.grid_columnconfigure(0, weight=1)
-
         tab_view = ctk.CTkTabview(right_frame); tab_view.pack(fill="both", expand=True, padx=5, pady=5)
         tab_profile = tab_view.add("Hotspots"); tab_optimize = tab_view.add("Optimized Source")
-        
         ctk.CTkLabel(tab_profile, text="Hotspots (sorted by Impact Score, * = leaf function)").pack(anchor="w", padx=5)
         self.txt_hotspots = ctk.CTkTextbox(tab_profile, wrap="none", font=("monospace", 11)); self.txt_hotspots.pack(fill="both", expand=True, padx=5, pady=5)
         ctk.CTkLabel(tab_optimize, text="Optimized Source Preview").pack(anchor="w", padx=5)
         self.txt_opt = ctk.CTkTextbox(tab_optimize, wrap="none", font=("monospace", 12)); self.txt_opt.pack(fill="both", expand=True, padx=5, pady=5)
-
         bottom_frame = ctk.CTkFrame(self.root, height=165); bottom_frame.pack(side="bottom", fill="both", expand=False, padx=10, pady=(5, 10))
         bottom_frame.grid_propagate(False); bottom_frame.grid_columnconfigure(0, weight=1); bottom_frame.grid_rowconfigure(2, weight=1) 
         self.lbl_status = ctk.CTkLabel(bottom_frame, text="Ready", anchor="w"); self.lbl_status.grid(row=0, column=0, sticky="ew", padx=10, pady=(5,0))
@@ -135,8 +124,6 @@ class PySpeedApp:
     
     def action_optimize(self):
         if not self.script_source: return self.log("No script loaded.")
-        if not self.prof_entries: return self.log("Please run Profile before optimizing.")
-        
         mode = self.opt_mode.get()
         self.set_status(f"Analyzing with mode: {mode}..."); self.log(f"Starting optimization pipeline (Mode: {mode})...")
         def worker():
@@ -200,7 +187,7 @@ class PySpeedApp:
             except Exception as e: self.log(f"Compare failed: {e}\n{traceback.format_exc()}"), self.set_status("Compare error")
         threading.Thread(target=worker, daemon=True).start()
 
-    def show_about(self): messagebox.showinfo("About PySpeed", "PySpeed Accelerator v2.2\n\nA professional-grade, multi-mode Python optimization tool. Autor:LMLK-seal")
+    def show_about(self): messagebox.showinfo("About PySpeed", "PySpeed Accelerator v2.2\n\nA professional-grade, multi-mode Python optimization tool. Autor: LMLK-seal")
 
 def main():
     root = ctk.CTk(); app = PySpeedApp(root); root.mainloop()
