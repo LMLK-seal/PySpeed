@@ -48,17 +48,33 @@ class BaseOptimizer:
         self.tree = source_tree; self.source = full_source
         self.profile = {p.func_name: p for p in profile_entries} if profile_entries else {}
         self.suggestions = []
-    def analyze(self) -> List[OptimizationSuggestion]: raise NotImplementedError
+
+    def analyze(self) -> List[OptimizationSuggestion]:
+        # Main entry point calls static and dynamic analysis
+        static_suggestions = self.static_analyze()
+        dynamic_suggestions = self.dynamic_analyze()
+        # Combine and de-duplicate suggestions
+        all_sugs = {}
+        for s in static_suggestions + dynamic_suggestions:
+            key = (s.func_name, s.message)
+            if key not in all_sugs:
+                all_sugs[key] = s
+        return list(all_sugs.values())
+
+    def static_analyze(self) -> List[OptimizationSuggestion]: return []
+    def dynamic_analyze(self) -> List[OptimizationSuggestion]: return []
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]: return self.tree, []
 
 class NumbaOptimizer(BaseOptimizer):
     opt_type = "numba"
-    def analyze(self) -> List[OptimizationSuggestion]:
+    def static_analyze(self) -> List[OptimizationSuggestion]:
+        suggestions = []
         for node in ast.walk(self.tree):
             if isinstance(node, ast.FunctionDef):
                 is_safe, reason = try_numba_compile(node, self.source)
-                self.suggestions.append(OptimizationSuggestion(node.name, node.lineno, reason, "recommendation" if is_safe else "info", self.opt_type))
-        return self.suggestions
+                suggestions.append(OptimizationSuggestion(node.name, node.lineno, reason, "recommendation" if is_safe else "info", self.opt_type))
+        return suggestions
+    def dynamic_analyze(self) -> List[OptimizationSuggestion]: return []
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]:
         transformed = []
         class DecoratorInserter(ast.NodeTransformer):
@@ -89,18 +105,21 @@ class MemoizationOptimizer(BaseOptimizer):
         for sub_node in ast.walk(node):
             if isinstance(sub_node, ast.Call) and isinstance(sub_node.func, ast.Name) and sub_node.func.id == node.name: return True
         return False
-    def analyze(self) -> List[OptimizationSuggestion]:
+    def static_analyze(self) -> List[OptimizationSuggestion]:
+        suggestions = []
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef) and self.is_recursive(node) and self.is_pure(node) and self.has_hashable_args(node):
+                suggestions.append(OptimizationSuggestion(node.name, node.lineno, "This recursive function with hashable arguments is a strong candidate for `@functools.lru_cache`.", "recommendation", self.opt_type))
+        return suggestions
+    def dynamic_analyze(self) -> List[OptimizationSuggestion]:
+        suggestions = []
         for node in ast.walk(self.tree):
             if isinstance(node, ast.FunctionDef):
-                is_pure_check = self.is_pure(node)
-                has_hashable_args_check = self.has_hashable_args(node)
-                is_recursive_check = self.is_recursive(node)
-                if is_pure_check and has_hashable_args_check and (is_recursive_check or (node.name in self.profile and self.profile[node.name].ncalls > 10)):
-                    reason = "This recursive function" if is_recursive_check else "This pure function"
-                    self.suggestions.append(OptimizationSuggestion(node.name, node.lineno, f"{reason} with hashable arguments is a strong candidate for `@functools.lru_cache`.", "recommendation", self.opt_type))
-                elif not has_hashable_args_check and node.name in self.profile:
-                    self.suggestions.append(OptimizationSuggestion(node.name, node.lineno, "Cannot memoize: Function accepts unhashable arguments (e.g., lists, arrays).", "info", self.opt_type))
-        return self.suggestions
+                if node.name in self.profile and self.profile[node.name].ncalls > 10 and self.is_pure(node) and self.has_hashable_args(node):
+                    suggestions.append(OptimizationSuggestion(node.name, node.lineno, "This pure function is called frequently. Consider using `@functools.lru_cache`.", "recommendation", self.opt_type))
+                elif not self.has_hashable_args(node) and node.name in self.profile:
+                    suggestions.append(OptimizationSuggestion(node.name, node.lineno, "Cannot memoize: Function accepts unhashable arguments (e.g., lists, arrays).", "info", self.opt_type))
+        return suggestions
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]:
         transformed = []
         class CacheInserter(ast.NodeTransformer):
@@ -117,7 +136,8 @@ class NumpyVectorizeOptimizer(BaseOptimizer):
         target = assign_node.target if isinstance(assign_node, ast.AugAssign) else assign_node.targets[0]
         if not isinstance(target, ast.Subscript): return False
         return True
-    def analyze(self) -> List[OptimizationSuggestion]:
+    def static_analyze(self) -> List[OptimizationSuggestion]:
+        suggestions = []
         for node in ast.walk(self.tree):
             if isinstance(node, ast.FunctionDef):
                 for item in node.body:
@@ -125,13 +145,11 @@ class NumpyVectorizeOptimizer(BaseOptimizer):
                         inner_loop_body = item.body
                         if len(item.body) == 1 and isinstance(item.body[0], ast.For): inner_loop_body = item.body[0].body
                         if len(inner_loop_body) == 1 and self._is_vectorizable_assign(inner_loop_body[0]):
-                             self.suggestions.append(OptimizationSuggestion(
-                                node.name, item.lineno, "This loop performs element-wise operations and can be rewritten with NumPy vectorization.", "recommendation", self.opt_type
-                            )); break
-        return self.suggestions
+                             suggestions.append(OptimizationSuggestion(node.name, item.lineno, "This loop performs element-wise operations and can be rewritten with NumPy vectorization.", "recommendation", self.opt_type)); break
+        return suggestions
+    def dynamic_analyze(self) -> List[OptimizationSuggestion]: return []
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]:
         transformed_funcs = []
-        # --- FIX: The rewriter class now gets the source code passed to it ---
         class VectorizeRewriter(ast.NodeTransformer):
             def __init__(self, source_code: str):
                 self.source = source_code
@@ -159,19 +177,41 @@ class NumpyVectorizeOptimizer(BaseOptimizer):
                                 return ast.fix_missing_locations(ast.parse(new_code).body[0])
                     except Exception: pass
                     return self.generic_visit(node)
-        
         rewriter = VectorizeRewriter(self.source)
         new_tree = rewriter.visit(self.tree)
         return new_tree, rewriter.transformed_funcs_list
 
 class BatchingOptimizer(BaseOptimizer):
     opt_type = "batching"
-    def analyze(self) -> List[OptimizationSuggestion]: return []
+    def static_analyze(self) -> List[OptimizationSuggestion]: return []
+    def dynamic_analyze(self) -> List[OptimizationSuggestion]:
+        suggestions = []
+        for func_name, entry in self.profile.items():
+            if entry.ncalls > 5000 and entry.tottime / entry.ncalls < 1e-5:
+                for node in ast.walk(self.tree):
+                    if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                        suggestions.append(OptimizationSuggestion(func_name, node.lineno, "High call frequency suggests refactoring to process inputs in batches.", "recommendation", self.opt_type)); break
+        return suggestions
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]: return self.tree, []
 
 class MultiprocessingOptimizer(BaseOptimizer):
     opt_type = "multiprocessing"
-    def analyze(self) -> List[OptimizationSuggestion]: return []
+    def is_cpu_bound(self, node: ast.For) -> bool:
+        for sub_node in ast.walk(node):
+            if isinstance(sub_node, ast.Call):
+                call_src = ast.get_source_segment(self.source, sub_node.func)
+                if call_src and any(io_call in call_src for io_call in ['open', 'print', '.read', '.write', 'sleep']): return False
+        return True
+    def static_analyze(self) -> List[OptimizationSuggestion]: return []
+    def dynamic_analyze(self) -> List[OptimizationSuggestion]:
+        suggestions = []
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.FunctionDef):
+                if node.name in self.profile and (self.profile[node.name].tottime > 1.0 or self.profile[node.name].impact_score > 10.0):
+                    for item in node.body:
+                        if isinstance(item, ast.For) and self.is_cpu_bound(item):
+                            suggestions.append(OptimizationSuggestion(node.name, item.lineno, "This CPU-bound loop is a good candidate for `concurrent.futures.ProcessPoolExecutor`.", "recommendation", self.opt_type)); break
+        return suggestions
     def transform(self, candidates: List[str]) -> Tuple[ast.AST, List[str]]: return self.tree, []
 
 # ---------- Pipeline and Profiling ----------
@@ -184,10 +224,19 @@ def run_optimization_pipeline(source: str, hotspot_funcs: List[str], mode: str, 
     for opt_cls in optimizer_classes:
         all_suggestions.extend(opt_cls(tree, profile_entries, full_source=source).analyze())
 
-    if not hotspot_funcs: return OptimizationResult(source, source, "", "", all_suggestions)
-    target_func_name = hotspot_funcs[0]
+    potential_targets = hotspot_funcs
+    if not potential_targets:
+        potential_targets = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+        if not potential_targets:
+            return OptimizationResult(source, source, "", "", all_suggestions, rejection_reason="No functions found to optimize.")
+    
+    target_func_name = potential_targets[0]
 
     if mode == "Multiprocessing Suggest":
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == target_func_name:
+                loop_node = next((item for item in node.body if isinstance(item, ast.For)), None)
+                if loop_node: return OptimizationResult(source, source, "", "", all_suggestions, actionable_suggestion=_generate_mp_template(node, loop_node, source))
         return OptimizationResult(source, source, "", "", all_suggestions)
 
     optimizer_map = {"Numba JIT": (NumbaOptimizer, {'numba'}), "NumPy Vectorize": (NumpyVectorizeOptimizer, {'numpy as np'}), "Memoization": (MemoizationOptimizer, {'functools'})}
@@ -224,11 +273,14 @@ def run_optimization_pipeline(source: str, hotspot_funcs: List[str], mode: str, 
 
     return OptimizationResult(source, modified_source, original_func_source, modified_func_source, all_suggestions, transformed_funcs, needed_imports)
 
+def _generate_mp_template(func_node: ast.FunctionDef, loop_node: ast.For, source: str) -> str:
+    func_name, loop_iterator, loop_variable = func_node.name, ast.get_source_segment(source, loop_node.iter).strip(), ast.get_source_segment(source, loop_node.target).strip()
+    return f"""# PySpeed Suggestion for parallelizing '{func_name}' ..."""
+
 def get_function_source(func_name: str, tree: ast.AST) -> str:
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == func_name: return ast_to_source(node)
     return ""
-def _generate_mp_template(func_node: ast.FunctionDef, loop_node: ast.For, source: str) -> str: return ""
 @dataclass
 class ProfileEntry:
     func_name: str; file: str; line: int; ncalls: int; tottime: float; cumtime: float;
